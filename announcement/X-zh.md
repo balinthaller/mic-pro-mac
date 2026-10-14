@@ -1,6 +1,8 @@
 # X 发布文案（中文）
 
-发布前把【公开仓库链接】替换成已经公开且无需登录即可访问的仓库链接。
+公开仓库：https://github.com/george-wyy/mic-pro-mac
+
+以下文案可直接复制；X 由项目作者自行发布。
 
 ## 短帖
 
@@ -10,7 +12,7 @@
 
 从蓝牙协议研究一路做到实机插拔验证。Swift 实现，MIT 开源预览版，目前只在一台 Mic Pro 上测过。
 
-【公开仓库链接】
+https://github.com/george-wyy/mic-pro-mac
 
 ## 开发过程串帖
 
@@ -47,7 +49,7 @@ micpro wallpaper-backup
 
 目前核心功能只在一台 Mic Pro TX、固件 2.0.2.4 上测过。欢迎其他设备/固件的开发者反馈。
 
-【公开仓库链接】
+https://github.com/george-wyy/mic-pro-mac
 
 ## 配图与视频脚本
 

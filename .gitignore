@@ -1,0 +1,12 @@
+build/
+logs/
+backups/
+recordings/
+.signing/
+.venv/
+__pycache__/
+.DS_Store
+config.json
+*.keychain-db
+*.p12
+*.pem

@@ -1,0 +1,32 @@
+import Foundation
+
+func expect(_ value: Bool, _ message: String) { if !value { fatalError(message) } }
+let connected = HandoffObservation.Snapshot(classicConnected: true, appBLEState: "none", connectionsSuppressed: true)
+let released = HandoffObservation.Snapshot(classicConnected: false, appBLEState: "none", connectionsSuppressed: true)
+let ble = HandoffObservation.Snapshot(classicConnected: false, appBLEState: "2", connectionsSuppressed: true)
+var model = HandoffObservation()
+let begin = model.begin(at: 10, snapshot: connected)
+expect(begin.count == 1 && begin[0].kind == .started, "initial observation logged once")
+let firstGeneration = model.generation
+expect(model.observe(at: 11, snapshot: connected, generation: firstGeneration).isEmpty, "unchanged state produces no per-second log")
+expect(model.observe(at: 12, snapshot: released, generation: firstGeneration).first?.kind == .changed, "classic disconnect observed")
+expect(model.observe(at: 13, snapshot: ble, generation: firstGeneration).first?.kind == .changed, "app BLE change observed")
+let unsuppressed = HandoffObservation.Snapshot(classicConnected: false, appBLEState: "2", connectionsSuppressed: false)
+expect(model.observe(at: 14, snapshot: unsuppressed, generation: firstGeneration).first?.kind == .changed, "suppression intent change observed without mutating intent")
+expect(model.observe(at: 15, snapshot: ble, generation: firstGeneration).first?.kind == .changed, "suppression return recorded")
+expect(model.observe(at: 189, snapshot: ble, generation: firstGeneration).isEmpty && model.active, "bounded window still active before limit")
+let timeout = model.observe(at: 190, snapshot: released, generation: firstGeneration)
+expect(timeout.count == 1 && timeout[0].kind == .ended("timeout") && timeout[0].snapshot == released && !model.active, "timeout includes final state and ends at 180 seconds")
+expect(model.observe(at: 191, snapshot: connected, generation: firstGeneration).isEmpty, "no observation after timeout")
+_ = model.begin(at: 200, snapshot: connected)
+let oldGeneration = model.generation
+let replaced = model.begin(at: 210, snapshot: released)
+expect(replaced.count == 2 && replaced[0].kind == .ended("replaced") && replaced[1].kind == .started, "replacement records old end and new initial state")
+expect(model.observe(at: 211, snapshot: connected, generation: oldGeneration).isEmpty && model.active, "stale timer cannot change replacement")
+expect(model.observe(at: 212, snapshot: connected, generation: model.generation).first?.kind == .changed, "replacement remains observable")
+let returned = model.finish(at: 213, snapshot: connected, reason: "return-to-mac:ui")
+expect(returned.first?.kind == .ended("return-to-mac:ui") && !model.active, "UI return ends observer with explicit attribution")
+expect(model.finish(at: 214, snapshot: connected, reason: "return-to-mac:agent").isEmpty, "repeated stop is silent")
+_ = model.begin(at: 220, snapshot: connected)
+expect(model.finish(at: 221, snapshot: released, reason: "return-to-mac:agent").first?.kind == .ended("return-to-mac:agent"), "Agent return attribution")
+print("PASS: bounded handoff observer, change-only logging, timeout, replacement, stale generation and explicit return attribution")

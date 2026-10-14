@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Local Agent API. The menu bar app must be running; no network listener."""
+import json, os, sys, time, uuid
+from pathlib import Path
+root = Path.home() / 'Library' / 'Application Support' / 'MicProMac' / 'logs' / 'agent'
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('action', choices=('vibrate', 'blink', 'status', 'handoff-to-phone', 'return-to-mac', 'recordings-list', 'recordings-download', 'recordings-progress', 'recordings-cancel', 'wallpaper-backup','wallpaper-upload','wallpaper-restore'))
+parser.add_argument('--duration', type=float)
+parser.add_argument('--image')
+parser.add_argument('--backup')
+parser.add_argument('--file-id', type=int)
+parser.add_argument('--fragment', type=int)
+parser.add_argument('--max-bytes', type=int, help='Bluetooth manifest byte limit; fail before accepting file payload')
+parser.add_argument('--transport', choices=('auto','bluetooth','usb'), default='auto')
+parser.add_argument('--usb-root')
+parser.add_argument('--relative-path')
+parser.add_argument('--request-id')
+parser.add_argument('--async', dest='asynchronous', action='store_true')
+
+args = parser.parse_args()
+if args.duration is not None and (args.action != 'blink' or not 0.2 <= args.duration <= 3):
+    parser.error('--duration requires blink and a value between 0.2 and 3 seconds')
+if args.action in ('wallpaper-upload','wallpaper-restore') and (not args.backup or (args.action == 'wallpaper-upload' and not args.image)):
+    parser.error('wallpaper-upload needs --image and --backup; wallpaper-restore needs --backup')
+if args.file_id is not None and args.action != 'recordings-download':
+    parser.error('--file-id requires recordings-download')
+if args.action == 'recordings-download' and (args.file_id is None and not args.relative_path):
+    parser.error('recordings-download requires --file-id or --relative-path from recordings-list')
+if args.fragment is not None and (args.action != 'recordings-download' or not 0 <= args.fragment <= 65535):
+    parser.error('--fragment requires recordings-download and a value between 0 and 65535')
+if args.max_bytes is not None and (args.action != 'recordings-download' or args.transport != 'bluetooth' or not 1 <= args.max_bytes <= 512*1024*1024):
+    parser.error('--max-bytes requires Bluetooth download and 1..512MiB')
+if args.file_id is not None and not 0 <= args.file_id <= 0xffffffff:
+    parser.error('invalid --file-id')
+if args.action == 'recordings-cancel' and not args.request_id:
+    parser.error('recordings-cancel requires --request-id')
+if args.request_id:
+    try: uuid.UUID(args.request_id)
+    except ValueError: parser.error('invalid --request-id')
+if args.asynchronous and args.action != 'recordings-download':
+    parser.error('--async requires recordings-download')
+root.mkdir(parents=True, exist_ok=True, mode=0o700)
+os.umask(0o077)
+id = str(uuid.uuid4())
+temporary = root / (id + '.tmp')
+request = root / (id + '.request.json')
+response = root / (id + '.response.json')
+payload = {'action': args.action}
+if args.action in ('recordings-list','recordings-download'):
+    payload['transport'] = args.transport
+if args.usb_root: payload['usb_root'] = str(Path(args.usb_root).resolve())
+if args.relative_path: payload['relative_path'] = args.relative_path
+if args.request_id: payload['target_id'] = args.request_id
+if args.file_id is not None:
+    payload['file_id'] = str(args.file_id)
+if args.max_bytes is not None: payload['max_bytes'] = str(args.max_bytes)
+if args.fragment is not None:
+    payload['fragment'] = str(args.fragment)
+if args.duration is not None:
+    payload['duration'] = args.duration
+if args.image:
+    payload['image'] = str(Path(args.image).resolve())
+if args.backup:
+    payload['backup'] = str(Path(args.backup).resolve())
+temporary.write_text(json.dumps(payload))
+temporary.replace(request)
+if args.asynchronous:
+    print(json.dumps({'ok':True,'accepted':True,'request_id':id}))
+    raise SystemExit(0)
+deadline = time.monotonic() + (22800 if args.action == 'recordings-download' else 1100 if args.action == 'recordings-list' else 5 if args.action in ('status','recordings-progress','recordings-cancel') else 200)
+while time.monotonic() < deadline:
+    if response.exists():
+        result = json.loads(response.read_text())
+        print(json.dumps(result, ensure_ascii=False))
+        raise SystemExit(0 if result.get('ok') else 1)
+    time.sleep(.1)
+if request.exists():
+    request.unlink()
+print(json.dumps({'ok': False, 'error': 'timeout; app may not be running; do not blindly retry feedback'}))
+raise SystemExit(1)

@@ -222,7 +222,7 @@ class Probe: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPeriph
         let known = central.retrieveConnectedPeripherals(withServices: [serviceID])
         for p in known where p.name?.contains(DeviceConfig.serialSuffix) == true { connect(p); return }
         let cached = UserDefaults.standard.string(forKey: "verifiedPeripheralID") ?? ""
-        if let id = UUID(uuidString: cached), let p = central.retrievePeripherals(withIdentifiers: [id]).first {
+        if let id = UUID(uuidString: cached), let p = central.retrievePeripherals(withIdentifiers: [id]).first, p.name?.contains(DeviceConfig.serialSuffix) == true {
             log("使用已验证设备标识直连控制通道，避免依赖重新扫描广播。")
             connect(p); return
         }
@@ -335,6 +335,7 @@ class Probe: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, CBPeriph
         if name.contains(DeviceConfig.serialSuffix) { connect(peripheral) }
     }
     func connect(_ p: CBPeripheral) {
+        guard DeviceConfig.target != nil, SystemBattery.device() != nil, p.name?.contains(DeviceConfig.serialSuffix) == true else { log("目标设备配置/名称不匹配，未连接"); return }
         guard !handoffSuppressed else { return }
         guard peripheral == nil else { return }
         central.stopScan(); scanTimer?.invalidate(); peripheral = p; p.delegate = self

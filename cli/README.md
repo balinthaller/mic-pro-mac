@@ -91,13 +91,48 @@ float, low-cut, child lock, vibration, LED. The remaining bytes encode the
 pattern (omni/cardioid/figure-8/…), mono/stereo, and bit-depth selection —
 but their exact positions/values differ per firmware.
 
-Find them in two guided reads:
+Find them in two guided reads. **You do not need the Mac to change settings
+here** — the phone app does the writing, the CLI does the reading. The TX
+serves both links at once: it streams audio to the Mac over classic
+Bluetooth while the phone app talks to it over its BLE app-link (the same
+way the app controls the TX during normal phone use).
 
 ```sh
-micproctl probe diff
-# …change exactly ONE setting on the device (vendor app or hardware buttons)…
-# press ENTER; the CLI re-reads and prints the byte that moved
+micproctl probe diff          # snapshot 1
+# …in the phone app, change exactly ONE setting (e.g. pattern → cardioid),
+#   wait for the app / e-ink to confirm the change…
+# press ENTER                  # snapshot 2; the CLI prints the byte that moved:
+#   group 0x1012 byte [6]: 0 -> 1
 ```
+
+Repeat the diff for each remaining value of the same field
+(omni→cardioid, cardioid→figure-8, …) — every diff pins one more value.
+
+Practice first with a known-good setting: toggling **mute** on the device
+should produce a one-line delta at `group 0x1000 byte [1]`. That validates
+your technique and the tool before you touch the app-only settings.
+
+If extra groups are needed (in case a setting lives outside the two known
+groups), name them and they are diffed too, read-only:
+
+```sh
+micproctl probe diff 0x1011 0x1013 0x1014 0x1015 0x1016 0x1018 0x1020
+```
+
+Tips for the cataloguing session:
+
+* One setting per diff. If two bytes move, repeat — the app sometimes also
+  updates a companion byte; the pattern will become obvious across runs.
+* Compare the app's current values with `micproctl settings` output first:
+  things like gain and noise reduction line up 1:1, which tells you what a
+  "sane" mapping looks like before discovering the unmapped bytes.
+* The vendor "bit depth" choice is very likely the known 32-bit-float byte
+  (`set float32`) — test it with a diff before hunting for a new byte.
+* If the app refuses to change something while the TX streams to the Mac
+  (some settings are disabled while live), disconnect the audio link
+  (`micproctl disconnect-audio`), make the change in the app, reconnect
+  (`micproctl connect-audio`), then press ENTER — the two snapshots run in
+  independent sessions, so this is safe.
 
 When you know the byte and its values, add it to
 `~/Library/Application Support/MicProMac/protocol-map.json`:

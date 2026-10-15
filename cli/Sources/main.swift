@@ -84,9 +84,9 @@ func printHelp() {
 
     Protocol research (read-only):
       micproctl probe read 0x1010 0x1011 ...              raw settings-group reads
-      micproctl probe diff                                guided before/after byte diff
+      micproctl probe diff [0x1011 0x1013 ...]        guided before/after diff, extra groups optional
     Pattern / mono-stereo / bit-depth bytes are not yet mapped: change one
-    setting on the device, run `probe diff`, then add entries to
+    setting (mobile app or device buttons both work), run `probe diff`, add to
       ~/Library/Application Support/MicProMac/protocol-map.json
     e.g. {"pattern":{"group":"0x1012","index":6,"values":{"omni":0,"cardioid":1,"figure8":2}}}
 
@@ -395,21 +395,28 @@ func probeSnapshot(options: CommonOptions, groups: [UInt16]) -> (common: Data?, 
     return (driver.context.common, driver.context.more, driver.context.rawGroupValues)
 }
 
-func runProbeDiff(options: CommonOptions, map: ProtocolMap) -> Never {
-    let extraGroups: [UInt16] = []
+func runProbeDiff(options: CommonOptions, map: ProtocolMap, groupArguments: [String]) -> Never {
+    var extraGroups: [UInt16] = []
+    for text in groupArguments {
+        guard let group = parseHexGroup(text) else { printErrorAndExit("bad group hex '\(text)' (e.g. 0x1011)") }
+        if !extraGroups.contains(group) { extraGroups.append(group) }
+    }
     print("== probe diff: snapshot 1 ==")
     guard let before = probeSnapshot(options: options, groups: extraGroups) else { exit(1) }
     print("snapshot 1 captured (\(Date().formatted()))")
-    print("Now change exactly ONE setting on the device (official app or device buttons),")
-    print("then press ENTER here…")
+    print("Now change exactly ONE setting — official mobile app or device buttons both work;")
+    print("wait for the app / e-ink to confirm the change took, then press ENTER here…")
     _ = readLine()
     print("== probe diff: snapshot 2 ==")
     guard let after = probeSnapshot(options: options, groups: extraGroups) else { exit(1) }
     print("snapshot 2 captured (\(Date().formatted()))")
+    for group in extraGroups where before.extra[group] == nil || after.extra[group] == nil {
+        print("note: group \(String(format: "0x%04X", group)) unreadable in at least one snapshot; excluded from the diff")
+    }
     var deltas: [(group: UInt16, index: Int, before: Int, after: Int)] = []
-    let pairs: [(UInt16, Data?, Data?)] = [(0x1000, before.common, after.common), (0x1012, before.more, after.more)]
-    for (group, old, new) in pairs {
-        guard let old = old, let new = new else { continue }
+    var pairs: [(UInt16, Data?, Data?)] = [(0x1000, before.common, after.common), (0x1012, before.more, after.more)]
+    for group in extraGroups { pairs.append((group, before.extra[group], after.extra[group])) }
+    for (group, old, new) in pairs { guard let old = old, let new = new else { continue }
         for index in 0..<min(old.count, new.count) where old[old.startIndex + index] != new[new.startIndex + index] {
             deltas.append((group, index, Int(old[old.startIndex + index]), Int(new[new.startIndex + index])))
         }
@@ -687,7 +694,7 @@ case "fields": runFields(map: map)
 case "probe":
     guard !rest.isEmpty else { printErrorAndExit("usage: micproctl probe read|diff …") }
     let sub = rest.removeFirst()
-    if sub == "diff" { runProbeDiff(options: options, map: map) }
+    if sub == "diff" { runProbeDiff(options: options, map: map, groupArguments: rest) }
     else if sub == "read" { runProbeRead(options: options, map: map, groupArguments: rest) }
     else { printErrorAndExit("probe expects read or diff") }
 case "wallpaper":

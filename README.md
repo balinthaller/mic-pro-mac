@@ -80,3 +80,29 @@ python3 scripts/test-public.py
 [隐私与边界](PRIVACY.md) · [公开版改动](CHANGELOG.md) · [协议研究来源](ACKNOWLEDGEMENTS.md)
 
 本包没有录音、个人壁纸、原始日志、设备身份、旧 Git 历史、签名密钥、厂商固件或官方 App 图片。Insta360、Mic Pro、腾讯会议及 Codex 名称仅用于说明互操作对象；商标属于相应权利人。MIT 许可证适用于本项目自有源码。
+
+---
+
+# Fork additions (balinthaller)
+
+## micproctl — standalone CLI (English docs in [`cli/README.md`](cli/README.md))
+
+This fork adds `build/micproctl`, a self-contained command-line tool that
+reuses this repo's protocol implementation without running the menu-bar app:
+
+- `micproctl status | battery` — battery percent + charging, both decoded
+  settings groups (integrated readout requested by the fork owner)
+- `micproctl set gain|noise|mute|float32|lowcut|led|vibration|childlock …`
+  — guarded whole-group writes with full read-back verification
+- `micproctl wallpaper backup|upload|restore` — e-ink screen management with
+  the same verified-backup + read-back gates (rfcomm transport)
+- `micproctl probe read|diff` — read-only protocol research; identifies the
+  pattern / mono-stereo / bit-depth bytes, which then become `set` verbs via
+  `~/Library/Application Support/MicProMac/protocol-map.json`
+- `micproctl doctor|configure|connect-audio|disconnect-audio` — local utilities
+
+Build with `./cli/build.sh`; offline tests via
+`python3 scripts/test-public.py` (job `CLI`). Two upstream one-line
+expressions in `Sources/WallpaperRender.swift` were split into equivalent
+sub-expressions so the file type-checks under `-O` on current toolchains;
+behavior is unchanged and covered by the existing suites.

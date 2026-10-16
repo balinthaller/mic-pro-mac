@@ -32,11 +32,18 @@ func renderedWallpaper(image: NSImage,options: WallpaperRenderOptions) throws ->
         var pixel=[Int](repeating:0,count:4);rep.getPixel(&pixel,atX:x,y:y)
         let luma=0.2126*Double(pixel[0])+0.7152*Double(pixel[1])+0.0722*Double(pixel[2])
         let rgb=(0..<3).map { c in max(0,min(255,luma+(Double(pixel[c])-luma)*options.saturation+(options.dither && y<208 ? errors[y*240+x][c] : 0))) }
-        let nearest=wallpaperRGB.min { a,b in (0..<3).reduce(0.0){$0+pow(Double(a[$1])-rgb[$1],2)} < (0..<3).reduce(0.0){$0+pow(Double(b[$1])-rgb[$1],2)} }!
+        let nearest=wallpaperRGB.min { a,b in
+            let first: Double=(0..<3).reduce(0.0) { $0 + pow(Double(a[$1]) - rgb[$1], 2) }
+            let second: Double=(0..<3).reduce(0.0) { $0 + pow(Double(b[$1]) - rgb[$1], 2) }
+            return first < second
+        }!
         var output=nearest+[255];rep.setPixel(&output,atX:x,y:y)
         if options.dither && y<208 {
             for (dx,dy,weight) in [(1,0,7.0/16),(-1,1,3.0/16),(0,1,5.0/16),(1,1,1.0/16)] where (0..<240).contains(x+dx) && (0..<208).contains(y+dy) {
-                for c in 0..<3 {errors[(y+dy)*240+x+dx][c]+=(rgb[c]-Double(nearest[c]))*weight}
+                for c in 0..<3 {
+                    let difference: Double=(rgb[c] - Double(nearest[c])) * weight
+                    errors[(y+dy)*240+x+dx][c] += difference
+                }
             }
         }
     } }

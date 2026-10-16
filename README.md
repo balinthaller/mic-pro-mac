@@ -1,27 +1,138 @@
-# Mic Pro Mac
+# Mic Pro Mac — CLI edition
 
-为 Insta360 Mic Pro 做的原生 macOS 小工具。菜单栏、侧边停靠条与控制面板，把设备状态、录音文件和墨水屏壁纸放到电脑上操作。
+Native macOS tools for the **Insta360 Mic Pro**. This repository contains two
+things:
 
-**公开开发预览版 · 基于 0.8.0 · Swift / AppKit · MIT**
+1. **`micproctl`** — a standalone command-line tool (added by this fork) that
+   puts the mic's settings, battery and e-ink display under your control from
+   the terminal. No vendor app, no menu bar, no restarts.
+2. The original **menu-bar app** by [george-wyy](https://github.com/george-wyy/mic-pro-mac)
+   — e-ink wallpaper editor, device status, recordings export (see below).
 
-[项目介绍与交互演示](https://george-wyy.github.io/mic-pro-mac/)
+Unofficial interoperability project, not affiliated with Insta360. Verified on
+one Mic Pro TX, firmware **2.0.2.4**; other devices/firmware may differ.
+Licensed MIT (see [Credits](#credits--license)).
 
-这是个人开发的非官方项目，与 Insta360、腾讯或 OpenAI 无隶属关系。核心功能在一台 Mic Pro TX、固件 **2.0.2.4** 上实机验证；公开版的设备配置与数据目录改造通过离线测试和构建，尚未验证更多设备/固件。适合愿意自行构建和反馈的开发者。
+---
 
-## 可以做什么
+## micproctl
 
-- **查看设备状态**：电量、充电/供电、电脑收音占用、设备内录和数据新鲜度。设备电量优先，macOS 缓存后备。
-- **原生 Mac 界面**：菜单栏、侧边自动收起的停靠条、⌃⌥M 控制面板、独立输入/输出音频选择。
-- **设备提示**：短暂切换降噪并恢复来触发震动；LED 整体切换并恢复来闪灯。它们不是独立马达或任意颜色控制。
-- **墨水屏图片**：导入自己的图片，预览、裁切、六色量化；先完整备份，再上传、完整读回校验，支持恢复已验证备份。
-- **内录导出**：蓝牙列出/下载已结束的 OGG 内录；USB 浏览与校验复制 OGG/WAV，支持进度和取消。原录音保留。
-- **本机 Agent 接口**：用 `micpro` CLI 查询状态、触发提示、导出录音或管理壁纸；通过本机文件收发请求，没有网络监听。
+### Build
 
-充电状态约30秒短连接读取，断连/过期显示未知。低于100%且设备报告供电时显示“充电中”；100%接电仅显示“已接电源”。它不独立检测热保护或充电暂停。短时间电量不变不等于没有耗电，不推算精确剩余续航。
+```sh
+./cli/build.sh            # produces build/micproctl
+```
 
-## 构建与配置
+Requires macOS with Xcode Command Line Tools (frameworks: IOBluetooth,
+CoreBluetooth, AppKit — no vendor SDK, no third-party dependencies).
 
-需要 macOS、支持当前系统的 Xcode Command Line Tools、Python 3。部分收音占用信息依赖 macOS 14.2+ API；其他系统版本与 Intel Mac 尚未做实机覆盖。没有厂商 SDK、第三方 Swift 依赖或随包固件。
+### First run
+
+Pair your Mic Pro TX in macOS Bluetooth Settings once, then:
+
+```sh
+build/micproctl doctor                       # checks pairing + config, suggests next steps
+build/micproctl configure --list             # lists paired Mic devices
+build/micproctl configure --address AA:BB:CC:DD:EE:01 --suffix TEST01   # your values (fictional example)
+```
+
+If the device requests physical confirmation, follow the on-screen prompt
+(single press of the TX power button).
+
+### Daily use
+
+```sh
+micproctl status                # battery, charging, all settings, e-ink checksum
+micproctl battery               # just the battery line
+micproctl settings              # decoded settings groups (--raw for hex)
+
+micproctl set pattern omni|cardioid|figure8|voicefocus   # sound direction
+micproctl set stereo on|off     # off = mono
+micproctl set float32 on|off    # bit depth (off = firmware enforces clipping protection)
+micproctl set gain -12…12       # input level in dB
+micproctl set noise off|on|high
+micproctl set mute|lowcut|led|vibration|childlock on|off
+
+micproctl connect-audio         # page the TX as the Mac audio device
+micproctl disconnect-audio      # release it (e.g. to hand over to the phone app)
+
+micproctl wallpaper backup      # verified backup of the e-ink image
+micproctl wallpaper upload img.png
+micproctl wallpaper restore --backup DIR
+```
+
+Add `--json` anywhere for machine-readable output; `fields` lists every known
+setting; `probe read/diff` are read-only research commands (below).
+
+### Mapped settings
+
+| Setting | CLI | Location | Values |
+|---|---|---|---|
+| Recording state (read-only) | `status` | `0x1000[0]` | active/inactive |
+| Mute | `set mute` | `0x1000[1]` | on/off |
+| Input gain | `set gain` | `0x1000[2]` | −12…12 dB (Int8) |
+| Noise reduction | `set noise` | `0x1000[3]` | off/on/high |
+| 32-bit float (bit depth) | `set float32` | `0x1012[0]` | on/off |
+| Stereo / mono | `set stereo` | `0x1012[1]` | on/off |
+| Low-cut filter | `set lowcut` | `0x1012[4]` | on/off |
+| Sound direction | `set pattern` | `0x1012[6]` | omni=0, cardioid=1, figure8=2, voicefocus=3 |
+| Child lock | `set childlock` | `0x1012[8]` | on/off |
+| Vibration alerts | `set vibration` | `0x1012[9]` | on/off |
+| LED indicator | `set led` | `0x1012[10]` | on/off |
+| Battery + charging | `battery` | BLE 180F + serial 0x1005 | percent, charging state |
+
+All of these were mapped by live probe diffs and verified by write/read-back
+round-trips on hardware. Bytes still unknown: `0x1000[4,5]`, `0x1012[2,3,5,7,11]`.
+
+### How writes are kept safe
+
+Every `set` is one transaction on a single settings group: **read → write →
+full read-back verification** with a device acknowledgement; a mismatch fails
+the command loudly. Writes are never auto-retried. Wallpaper uploads refuse to
+run without a previously verified backup. The e-ink path always uses the
+vendor's RFCOMM channel 10; settings/battery prefer RFCOMM when the mic is
+connected as an audio device and fall back to BLE for read-only work. After a
+reconnect, a failed open is retried once after 3 s to absorb the TX's serial
+server settle time.
+
+### Vendor behavior notes (observed on hardware, 2.0.2.4)
+
+* **Gain mode couples to bit depth.** With 32-bit float **off** the firmware
+  forces the "prevent audio clipping" limiter; toggling the app's gain mode
+  moves no stored settings byte. With float32 **on**, manual gain applies.
+  From the CLI: `set float32 on` + `set gain …`. The limiter may still engage
+  on its own even in float32 mode.
+* **One controller at a time.** The TX serves a single audio host, and the
+  vendor app wants the audio link as well — hand the mic over explicitly with
+  `disconnect-audio` / `connect-audio` instead of expecting simultaneous
+  phone + Mac sessions.
+* **The power-button confirmation doubles as a noise toggle** on the TX.
+  After an authorization press, check `settings` and restore `noise` if moved.
+
+### When the firmware changes
+
+If a future firmware shifts bytes around, re-map without rebuilding:
+
+```sh
+micproctl probe diff        # snapshot 1 → disconnect-audio → change ONE setting
+                            # in the app → close app → connect-audio → ENTER
+```
+
+The diff prints which byte moved; confirmed mappings go into
+`~/Library/Application Support/MicProMac/protocol-map.json`
+(e.g. `{"pattern":{"group":"0x1012","index":6,"values":{"omni":0,…}}}`)
+or become built-ins in `cli/Sources/fields.swift`.
+
+---
+
+## The menu-bar app (upstream)
+
+The original app by george-wyy — device status in the menu bar, e-ink
+wallpaper import/preview/six-color quantization with verified backup and
+upload, Bluetooth/USB recordings export, and a local `micpro` agent CLI.
+Its original (Chinese-language) documentation lives at the
+[upstream repository](https://github.com/george-wyy/mic-pro-mac) and the
+[project page](https://george-wyy.github.io/mic-pro-mac/).
 
 ```sh
 python3 scripts/setup-local-signing.py
@@ -29,80 +140,30 @@ python3 scripts/setup-local-signing.py
 open 'build/Mic Pro Probe.app'
 ```
 
-首次启动按系统提示授予蓝牙权限。**尚未配置时不会自动选择或控制麦克风**，会打开控制面板提示配置。
+Grant Bluetooth permission on first launch. Configuration requires a paired
+device matched by address **and** name suffix; vendor protocol reads also
+verify device identity. Config, logs, exported recordings and wallpaper
+backups live in `~/Library/Application Support/MicProMac/` (`config.json`
+is 0600; `MICPRO_CONFIG` overrides the path for testing).
 
-1. 先在 macOS 蓝牙设置中配对自己的 Mic Pro。
-2. 列出已配对的 Mic Pro 名称和地址：
-
-```sh
-python3 scripts/configure-device.py --list
-```
-
-3. 用你自己的蓝牙地址与设备名称末尾六位配置。下面是虚构示例，不能直接用于真实设备：
+## Development & tests
 
 ```sh
-python3 scripts/configure-device.py --address AA:BB:CC:DD:EE:01 --suffix TEST01
+python3 scripts/test-public.py      # offline suite (13 jobs; no device contact)
 ```
 
-4. 退出并重新打开小工具。匹配同时要求已配对设备的地址和名称后缀；厂商协议读取还会核对设备身份。若需要物理确认，遵循设备与应用提示。
-
-配置、日志、导出录音与壁纸备份保存在 `~/Library/Application Support/MicProMac/`。配置文件是 `config.json`，权限为0600。测试/开发可通过 `MICPRO_CONFIG` 指定其他配置文件，修改配置后需重启。公开版使用独立的应用标识，不覆盖其他原型应用的授权和偏好。
-
-默认使用每位使用者自己生成的本地固定签名，密钥只留在 `.signing/`。开发者也可 `MICPRO_ADHOC=1 ./build.sh` 做临时构建检查；公开预览未做 Apple 公证，不提供开发者签名身份。
-
-## Agent 使用
-
-```sh
-./micpro status
-./micpro vibrate
-./micpro blink --duration 2
-./micpro recordings-list
-./micpro recordings-list --transport usb
-./micpro wallpaper-backup
-```
-
-下载时使用列表实际返回的 file_id 或相对路径，不复用示例编号。上传/恢复要求可验证的完整备份；参数详见 `./micpro --help`。一次设备控制事务完成后再发下一次，不在内录进行中做蓝牙下载。
-
-## 可选与实验功能
-
-Codex 额度模块默认关闭；启用 `config.json` 中的 `codex_quota_enabled: true` 后重启。它使用已安装的官方 Codex app-server 读取登录账户额度，不读取认证文件或导出凭据，也不会运行模型请求。
-
-会议模式切换、交互式音频实验和旧诊断命令默认关闭；高级开发者可设 `experimental_features_enabled: true`。Mac/手机无重启接管和未知固件兼容性没有普遍验证，不作为公开版的功能承诺。
-
-## 开发与验证
-
-```sh
-python3 scripts/test-public.py
-```
-
-离线覆盖显式设备配置、协议消息关联、充电数据解析/过期、提示参数恢复、USB复制与取消、耗电日志过滤、交接模型及布局；最后检查完整源码编译。脚本不会扫描、连接或写入蓝牙设备。
-
-[隐私与边界](PRIVACY.md) · [公开版改动](CHANGELOG.md) · [协议研究来源](ACKNOWLEDGEMENTS.md)
-
-本包没有录音、个人壁纸、原始日志、设备身份、旧 Git 历史、签名密钥、厂商固件或官方 App 图片。Insta360、Mic Pro、腾讯会议及 Codex 名称仅用于说明互操作对象；商标属于相应权利人。MIT 许可证适用于本项目自有源码。
-
----
-
-# Fork additions (balinthaller)
-
-## micproctl — standalone CLI (English docs in [`cli/README.md`](cli/README.md))
-
-This fork adds `build/micproctl`, a self-contained command-line tool that
-reuses this repo's protocol implementation without running the menu-bar app:
-
-- `micproctl status | battery` — battery percent + charging, both decoded
-  settings groups (integrated readout requested by the fork owner)
-- `micproctl set gain|noise|mute|float32|lowcut|led|vibration|childlock …`
-  — guarded whole-group writes with full read-back verification
-- `micproctl wallpaper backup|upload|restore` — e-ink screen management with
-  the same verified-backup + read-back gates (rfcomm transport)
-- `micproctl probe read|diff` — read-only protocol research; identifies the
-  pattern / mono-stereo / bit-depth bytes, which then become `set` verbs via
-  `~/Library/Application Support/MicProMac/protocol-map.json`
-- `micproctl doctor|configure|connect-audio|disconnect-audio` — local utilities
-
-Build with `./cli/build.sh`; offline tests via
-`python3 scripts/test-public.py` (job `CLI`). Two upstream one-line
+The CLI is under `cli/` (`fields.swift` — mappings, `engine.swift` — session
+state machine, `transport.swift` — RFCOMM/BLE, `main.swift` — argument
+parsing) and reuses the app's protocol sources directly. Two one-line
 expressions in `Sources/WallpaperRender.swift` were split into equivalent
 sub-expressions so the file type-checks under `-O` on current toolchains;
-behavior is unchanged and covered by the existing suites.
+behavior is unchanged.
+
+## Credits & license
+
+* Upstream app and protocol implementation: [george-wyy/mic-pro-mac](https://github.com/george-wyy/mic-pro-mac) (MIT).
+* Protocol research builds on the sources listed in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+* `micproctl` and the mapping work documented here: this fork's contributors.
+* Insta360, Mic Pro and Tencent are trademarks of their respective owners,
+  used only to describe interoperability targets. MIT applies to this
+  project's own source code.

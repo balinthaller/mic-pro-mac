@@ -85,17 +85,16 @@ automatic in each upload/restore invocation.
 ## Mapping the unmapped fields: pattern, mono/stereo, bit depth
 
 The two settings groups (6-byte `0x1000` "common", 12-byte `0x1012` "more")
-hold every normal transmitter setting, but upstream has only decoded part of
-them. Known so far: recording state, mute, gain, noise reduction, 32-bit
-float, low-cut, child lock, vibration, LED. The remaining bytes encode the
-pattern (omni/cardioid/figure-8/…), mono/stereo, and bit-depth selection —
-but their exact positions/values differ per firmware.
+hold every normal transmitter setting. Mapped so far (built into the CLI):
+recording state, mute, gain, noise reduction, **sound direction / pattern**
+(omni=0, cardioid=1, figure8=2, voicefocus=3 at `more[6]`), 32-bit float
+(the app's bit-depth choice, `more[0]`), low-cut, child lock, vibration, LED.
+Still unmapped: stereo/mono and auto gain — their positions differ per
+firmware.
 
-Find them in two guided reads. **You do not need the Mac to change settings
-here** — the phone app does the writing, the CLI does the reading. The TX
-serves both links at once: it streams audio to the Mac over classic
-Bluetooth while the phone app talks to it over its BLE app-link (the same
-way the app controls the TX during normal phone use).
+Find them in two guided reads. The phone app does the writing, the CLI does
+the reading — one controller at a time (single audio host; the vendor app
+wants the audio link too), so you hand the mic over during the pause:
 
 ```sh
 micproctl probe diff          # snapshot 1

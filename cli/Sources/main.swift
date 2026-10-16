@@ -97,10 +97,12 @@ func printHelp() {
     Protocol research (read-only):
       micproctl probe read 0x1010 0x1011 ...              raw settings-group reads
       micproctl probe diff [0x1011 0x1013 ...]        guided before/after diff, extra groups optional
-    Pattern / mono-stereo / bit-depth bytes are not yet mapped: change one
-    setting (mobile app or device buttons both work), run `probe diff`, add to
+    Already mapped as built-ins: pattern (sound direction: omni/cardioid/
+    figure8/voicefocus) and 32-bit float (the app's bit-depth choice).
+    Still unmapped: stereo/mono, auto gain — change one setting (mobile app
+    or device buttons both work), run `probe diff`, then add entries to
       ~/Library/Application Support/MicProMac/protocol-map.json
-    e.g. {"pattern":{"group":"0x1012","index":6,"values":{"omni":0,"cardioid":1,"figure8":2}}}
+    e.g. {"stereo":{"group":"0x1012","index":1,"values":{"off":0,"on":1}}}
 
     Local utilities:
       micproctl doctor                       diagnostics (config, pairing, services)

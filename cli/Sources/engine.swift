@@ -352,39 +352,65 @@ final class Driver: NSObject {
     }
 
     private func activateAndRun(_ mode: TransportMode) {
+        // Snapshot-2 style flakiness: right after the mic bounces back from the
+        // phone, the link is up but the serial server is still settling, so a
+        // single open attempt stalls. Retry the open with a gap before giving
+        // up; only auto-fallback to the other transport in `auto` mode.
         var fellBack = false
+        var attempts = 1
+        let maxAttempts: (rfcomm: Int, ble: Int) = (2, 1)
+        let retryDelay: TimeInterval = 3
+        func resetSessionProgress() {
+            activeItem = nil; activePlan = nil
+            cursor = 0
+            lastRequestAt = nil; lastFrameAt = nil
+            promptedConfirmation = false
+            context.identity = nil
+            context.wallpaperInventoryBody = nil
+            context.common = nil
+            context.more = nil
+        }
         func activate(_ chosen: TransportMode) -> Bool {
             transport = makeTransport(mode: chosen, channelOverride: rfcommChannelOverride, driver: self)
             guard let channel = transport else { return false }
             context.transportName = channel.name
-            printDebug("transport: \(channel.name)")
+            printDebug("transport: \(channel.name) (attempt \(attempts))")
             channel.onOpen = { [weak self] in self?.tick() }
             channel.onFrames = { [weak self] frame in self?.consume(frame: frame) }
             channel.onFail = { [weak self] message, stage in
                 guard let self = self else { return }
-                let primaryWasRfcomm = channel is RfcommChannel
-                if stage == .open, !fellBack, self.allowBleFallback {
-                    let fallbackMode: TransportMode = primaryWasRfcomm ? .ble : .rfcomm
-                    if fallbackMode == .rfcomm && RfcommChannel.selectSettingsChannel(preferred: rfcommChannelOverride ?? 10) == nil {
+                guard stage == .open else { self.fail(transportMessage: message); return }
+                let failedKindIsRfcomm = channel is RfcommChannel
+                let maxForKind = failedKindIsRfcomm ? maxAttempts.rfcomm : maxAttempts.ble
+                if attempts < maxForKind {
+                    attempts += 1
+                    self.transport?.close()
+                    resetSessionProgress()
+                    self.printLine("transport open failed (attempt \(attempts - 1) of \(maxForKind)); retrying in \(Int(retryDelay)) s — the serial server may still be settling after a reconnect…")
+                    let retry = Timer.scheduledTimer(withTimeInterval: retryDelay, repeats: false) { _ in
+                        _ = activate(chosen)
+                    }
+                    RunLoop.main.add(retry, forMode: .default)
+                    return
+                }
+                if !fellBack, allowBleFallback, mode == .auto {
+                    let other: TransportMode = failedKindIsRfcomm ? .ble : .rfcomm
+                    if other == .rfcomm, RfcommChannel.selectSettingsChannel(preferred: rfcommChannelOverride ?? 10) == nil {
                         self.fail(transportMessage: message)
                         return
                     }
                     fellBack = true
+                    attempts = 1
                     self.transport?.close()
-                    self.printLine(primaryWasRfcomm
+                    resetSessionProgress()
+                    self.printLine(failedKindIsRfcomm
                         ? "rfcomm control unusable; retrying the same operation over BLE…"
                         : "ble control unusable; retrying over the RFCOMM serial…")
                     self.printLine(message)
-                    // restart the session cleanly over the other transport
-                    self.activeItem = nil; self.activePlan = nil
-                    self.cursor = 0
-                    self.lastRequestAt = nil; self.lastFrameAt = nil
-                    self.promptedConfirmation = false
-                    self.context.identity = nil
-                    self.context.wallpaperInventoryBody = nil
-                    self.context.common = nil
-                    self.context.more = nil
-                    if !activate(fallbackMode) { self.fail(transportMessage: message) }
+                    let retry = Timer.scheduledTimer(withTimeInterval: retryDelay, repeats: false) { _ in
+                        _ = activate(other)
+                    }
+                    RunLoop.main.add(retry, forMode: .default)
                     return
                 }
                 self.fail(transportMessage: message)

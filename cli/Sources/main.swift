@@ -99,7 +99,7 @@ func printHelp() {
       micproctl probe diff [0x1011 0x1013 ...]        guided before/after diff, extra groups optional
     Already mapped as built-ins: pattern (sound direction: omni/cardioid/
     figure8/voicefocus) and 32-bit float (the app's bit-depth choice).
-    Still unmapped: stereo/mono, auto gain — change one setting (mobile app
+    Still unmapped: auto gain — change one setting (mobile app
     or device buttons both work), run `probe diff`, then add entries to
       ~/Library/Application Support/MicProMac/protocol-map.json
     e.g. {"stereo":{"group":"0x1012","index":1,"values":{"off":0,"on":1}}}
@@ -183,7 +183,7 @@ func printDecodedGroup(_ group: UInt16, _ values: Data, map: ProtocolMap) {
     print(String(format: "group 0x%04X (%d bytes): %@", group, values.count, hexDump(values) as NSString))
     for row in decodeGroup(group, values, map: map) {
         let label = (row.position < labels.count ? labels[row.position] : row.label)
-        print("  [b\(row.position)] \(label.padding(toLength: 18, withPad: " ", startingAt: 0)) = \(row.value)")
+        print("  [b\(row.position)] \(label.padding(toLength: 24, withPad: " ", startingAt: 0)) = \(row.value)")
     }
 }
 

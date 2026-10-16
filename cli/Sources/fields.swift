@@ -31,6 +31,7 @@ let knownFields: [FieldSpec] = [
     FieldSpec(name: "pattern", group: 0x1012, index: 6, kind: .enumValues,
               values: ["omni": 0, "cardioid": 1, "figure8": 2, "voicefocus": 3],
               summary: "sound direction / polar pattern (mapped by probe diff on firmware of 2026-01)"),
+    FieldSpec(name: "stereo", group: 0x1012, index: 1, kind: .boolean, values: [:], summary: "stereo mode (off = mono)"),
     FieldSpec(name: "float32", group: 0x1012, index: 0, kind: .boolean, values: [:], summary: "32-bit float internal recording"),
     FieldSpec(name: "lowcut", group: 0x1012, index: 4, kind: .boolean, values: [:], summary: "low-cut filter"),
     FieldSpec(name: "childlock", group: 0x1012, index: 8, kind: .boolean, values: [:], summary: "button lock"),
@@ -39,7 +40,7 @@ let knownFields: [FieldSpec] = [
 ]
 
 let commonLabels = ["recording state", "mute", "gain (dB Int8)", "noise reduction", "unknown[4]", "unknown[5]"]
-let moreLabels = ["32-bit float", "unknown[1]", "unknown[2]", "unknown[3]", "low-cut", "unknown[5]", "sound direction", "unknown[7]", "child lock", "vibration", "LED indicator", "unknown[11]"]
+let moreLabels = ["32-bit float", "stereo (mono when off)", "unknown[2]", "unknown[3]", "low-cut", "unknown[5]", "sound direction", "unknown[7]", "child lock", "vibration", "LED indicator", "unknown[11]"]
 
 enum CLIError: Error { case usage(String), failed(String) }
 

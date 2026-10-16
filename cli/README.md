@@ -172,6 +172,33 @@ read-only (values shown as raw hex, including the trailing protocol bytes).
 * First control session per power cycle requires a physical confirmation: the
   CLI prints "single-press the power button now" when the device asks for it.
 
+## Troubleshooting
+
+**"the Mic Pro is not connected over Bluetooth right now"** — macOS tears the
+audio link down whenever no app is capturing the mic, and the TX powers its
+radio off when idle. Power the mic on and run `micproctl connect-audio`, or
+start any app that captures its input. Settings/battery can also run over
+`--transport ble` without the audio link (triple-press power if BLE discovery
+finds nothing — the control broadcast only runs in pairing mode while idle).
+
+**First control per power cycle asks for a button press** — the device
+requires physical confirmation; the CLI prints
+`AUTHORIZATION: single-press the power button…`. On the TX that same press
+doubles as a noise-cancellation toggle; read the state afterwards with
+`micproctl settings` and restore with `micproctl set noise …` if it moved.
+
+**`RFCOMM channel 10 never opened`** — the link dropped mid-session, another
+control client (vendor phone app) holds the session, or this firmware
+publishes the settings serial elsewhere: `micproctl doctor` lists every
+service and channel; retry with `--rfcomm-channel N` or `--transport ble`.
+
+**First BLE use from a terminal** — macOS shows a Bluetooth permission prompt
+for the terminal app once; approve it (headless/SSH sessions cannot show it —
+grant access in System Settings → Privacy & Security → Bluetooth).
+
+**Everything failing weirdly** — rerun with `MICPROCTL_DEBUG=1` and check
+`micproctl doctor`.
+
 ## Development
 
 ```sh

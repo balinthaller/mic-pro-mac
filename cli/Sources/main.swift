@@ -5,6 +5,11 @@ import AppKit
 let cliVersion = "0.1.0"
 let projectRoot = DeviceConfig.dataDirectory.path
 
+// Piped output (| head) must never kill or hang the tool mid-session, and
+// live prompts (authorization, probe diff) must appear even when piped.
+signal(SIGPIPE, SIG_IGN)
+setvbuf(stdout, nil, _IOLBF, 0)
+
 func printErrorAndExit(_ text: String, _ code: Int = 2) -> Never {
     FileHandle.standardError.write(Data(("error: " + text + "\n").utf8))
     exit(Int32(code == 0 ? 2 : code))
@@ -14,6 +19,7 @@ struct CommonOptions {
     var transport: TransportMode = .auto
     var json = false
     var transportWasExplicit = false
+    var rfcommChannel: UInt8?
 }
 
 func parseOptions(_ arguments: [String]) -> (options: CommonOptions, rest: [String], problem: String?) {
@@ -23,6 +29,12 @@ func parseOptions(_ arguments: [String]) -> (options: CommonOptions, rest: [Stri
     while index < arguments.count {
         let text = arguments[index]
         if text == "--json" { options.json = true; index += 1; continue }
+        if text == "--rfcomm-channel" {
+            guard index + 1 < arguments.count, let channel = UInt8(arguments[index + 1]), channel > 0 else {
+                return (options, rest, "--rfcomm-channel expects a channel number, e.g. --rfcomm-channel 10")
+            }
+            options.rfcommChannel = channel; index += 2; continue
+        }
         if text == "--transport" {
             guard index + 1 < arguments.count, let mode = parseTransportMode(arguments[index + 1]) else {
                 return (options, rest, "--transport expects auto|ble|rfcomm")
@@ -126,8 +138,10 @@ func sessionFailure(_ driver: Driver, _ options: CommonOptions, exitCode: Int) -
     exit(Int32(exitCode == 0 ? 1 : exitCode))
 }
 
-func runSession(options: CommonOptions, items: [Driver.Item], hardDeadline: TimeInterval = 2400) -> (Driver, Int) {
-    let driver = Driver(jsonOutput: options.json, hardDeadline: hardDeadline, items: items)
+func runSession(options: CommonOptions, items: [Driver.Item], hardDeadline: TimeInterval = 2400, allowBleFallback: Bool = true) -> (Driver, Int) {
+    let driver = Driver(jsonOutput: options.json, hardDeadline: hardDeadline, items: items,
+                        allowBleFallback: allowBleFallback,
+                        rfcommChannelOverride: options.rfcommChannel.map { BluetoothRFCOMMChannelID($0) })
     var code = 1
     driver.run(mode: options.transport) { exitCode in code = exitCode }
     return (driver, code)
@@ -476,7 +490,7 @@ func runWallpaperBackup(options: CommonOptions) -> Never {
     options.transport = .rfcomm
     let readBox = Box<AppControlReadPlan>()
     let wallBox = Box<WallpaperReadOp>()
-    let (driver, code) = runSession(options: options, items: [readItemStep(includeBattery: false, into: readBox), wallpaperReadStep(into: wallBox)], hardDeadline: 600)
+    let (driver, code) = runSession(options: options, items: [readItemStep(includeBattery: false, into: readBox), wallpaperReadStep(into: wallBox)], hardDeadline: 600, allowBleFallback: false)
     guard code == 0, let plan = wallBox.value?.plan, let readPlan = readBox.value else { sessionFailure(driver, options, exitCode: code) }
     do {
         let url = try saveWallpaperBackup(plan: plan, readPlan: readPlan, id: UUID().uuidString)
@@ -530,7 +544,7 @@ func runWallpaperTransfer(options: CommonOptions, image: String?, backupDirector
                  sleepStep,
                  readItemStep(includeBattery: false, into: secondReadBox),
                  verifyWallpaperStep]
-    let (driver, code) = runSession(options: options, items: items, hardDeadline: 900)
+    let (driver, code) = runSession(options: options, items: items, hardDeadline: 900, allowBleFallback: false)
     guard code == 0, let assets = assetsBox.value, let verify = verifyBox.value,
           let secondRead = secondReadBox.value else { sessionFailure(driver, options, exitCode: code) }
     // Confirm the screen now holds exactly what we sent.
@@ -578,18 +592,32 @@ func runDoctor() -> Never {
     }
     if let device = SystemBattery.device() {
         print("  paired device: \(device.name ?? "?") [\(device.addressString ?? "?")] connected=\(device.isConnected())")
+        if !device.isConnected() {
+            print("""
+            the Bluetooth link is down: macOS disconnects idle audio devices, and the TX
+            powers its radio down when not in use. Power the mic on and run `micproctl connect-audio`,
+            or start any app that captures its input, then retry. Settings/battery can also use
+            --transport ble (triple-press power if BLE discovery finds nothing).
+            """)
+        }
         if device.isConnected() {
-            if let services = device.services as? [IOBluetoothSDPServiceRecord] {
-                var channels: [BluetoothRFCOMMChannelID] = []
-                for record in services {
-                    var channel: BluetoothRFCOMMChannelID = 0
-                    if record.getRFCOMMChannelID(&channel) == 0 { channels.append(channel) }
+            let records = classicServiceRecords()
+            if records.isEmpty {
+                print("  serial services: none visible in SDP (unexpected while audio-connected)")
+            } else {
+                print("  serial services advertised by the device:")
+                for record in records {
+                    let marker = record.isAudioProfile
+                        ? "  [audio profile — not the settings serial]"
+                        : (record.channel == (10) ? "  [preferred settings/wallpaper channel]" : "  [vendor serial — try --rfcomm-channel \(record.channel) if ch10 fails]")
+                    let channelText = String(record.channel).padding(toLength: 3, withPad: " ", startingAt: 0)
+                    print("    ch \(channelText)\(record.name)\(marker)")
                 }
-                print("  rfcomm channels published: \(channels.map { String($0) }.joined(separator: ", "))")
-                if channels.contains(10) { print("    ch10 (settings/wallpaper control): available") }
             }
             if let level = SystemBattery.micProLevel() { print("  battery (system cache): \(level)%") }
             else { print("  battery (system cache): not reported yet") }
+            let selected = RfcommChannel.selectSettingsChannel(preferred: 10)
+            print("  rfcomm channel the CLI would use: \(selected.map { String($0) } ?? "none — BLE transport would be chosen")")
         }
     } else {
         print("  paired device: no paired classic Bluetooth device matches the configuration")

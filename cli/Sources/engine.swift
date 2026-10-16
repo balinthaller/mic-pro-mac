@@ -1,6 +1,7 @@
 import Foundation
 import CoreBluetooth
 import IOBluetooth
+import AppKit
 
 func printDebug(_ text: String) {
     if ProcessInfo.processInfo.environment["MICPROCTL_DEBUG"] == "1" {
@@ -57,9 +58,10 @@ extension SessionPlan {
 
 protocol TransportChannel: AnyObject {
     var name: String { get }
+    var isOpen: Bool { get }
     var onOpen: (() -> Void)? { get set }
     var onFrames: ((Frame) -> Void)? { get set }
-    var onFail: ((String) -> Void)? { get set }
+    var onFail: ((String, TransportStage) -> Void)? { get set }
     func start()
     func write(_ data: Data)
     func close()
@@ -307,7 +309,6 @@ final class Driver: NSObject {
     private var items: [Item]
     private var cursor = 0
     private var transport: TransportChannel?
-    private var timer: Timer?
     private var lastRequestAt: Date?
     private var lastFrameAt: Date?
     private var promptedConfirmation = false
@@ -319,27 +320,94 @@ final class Driver: NSObject {
     var jsonLines: [String] = []
     private var activeItem: Item?
     private var activePlan: SessionPlan?
-    init(jsonOutput: Bool, hardDeadline: TimeInterval = 2400, items: [Item]) {
+    private var timer: Timer?
+    let allowBleFallback: Bool
+    let rfcommChannelOverride: BluetoothRFCOMMChannelID?
+    init(jsonOutput: Bool, hardDeadline: TimeInterval = 2400, items: [Item],
+         allowBleFallback: Bool = true, rfcommChannelOverride: BluetoothRFCOMMChannelID? = nil) {
         self.jsonOutput = jsonOutput
         self.hardDeadline = hardDeadline
         self.items = items
+        self.allowBleFallback = allowBleFallback
+        self.rfcommChannelOverride = rfcommChannelOverride
         super.init()
     }
 
     func run(mode: TransportMode, completion: @escaping (Int) -> Void) {
         exitCallback = completion
-        transport = makeTransport(mode: mode, driver: self)
-        guard let transport = transport else { completion(2); return }
-        context.transportName = transport.name
-        printDebug("transport: \(transport.name)")
-        transport.onOpen = { [weak self] in self?.tick() }
-        transport.onFrames = { [weak self] frame in self?.consume(frame: frame) }
-        transport.onFail = { [weak self] message in self?.fail(transportMessage: message) }
-        transport.start()
-        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
-        self.timer = timer
-        RunLoop.main.add(timer, forMode: .default)
-        RunLoop.main.run()
+        // IOBluetooth's notification machinery must be initialized BEFORE the
+        // NSApplication loop starts: a first touch inside the loop silently
+        // breaks async callback delivery (bisected and reproduced locally).
+        _ = IOBluetoothDevice.pairedDevices()
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        // The transport must be opened from INSIDE the running app loop —
+        // IOBluetooth async callbacks only deliver then (proven on this toolchain).
+        let boot = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { [weak self] _ in self?.activateAndRun(mode) }
+        RunLoop.main.add(boot, forMode: .default)
+        let tick = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
+        self.timer = tick
+        RunLoop.main.add(tick, forMode: .default)
+        application.run()
+    }
+
+    private func activateAndRun(_ mode: TransportMode) {
+        var fellBack = false
+        func activate(_ chosen: TransportMode) -> Bool {
+            transport = makeTransport(mode: chosen, channelOverride: rfcommChannelOverride, driver: self)
+            guard let channel = transport else { return false }
+            context.transportName = channel.name
+            printDebug("transport: \(channel.name)")
+            channel.onOpen = { [weak self] in self?.tick() }
+            channel.onFrames = { [weak self] frame in self?.consume(frame: frame) }
+            channel.onFail = { [weak self] message, stage in
+                guard let self = self else { return }
+                let primaryWasRfcomm = channel is RfcommChannel
+                if stage == .open, !fellBack, self.allowBleFallback {
+                    let fallbackMode: TransportMode = primaryWasRfcomm ? .ble : .rfcomm
+                    if fallbackMode == .rfcomm && RfcommChannel.selectSettingsChannel(preferred: rfcommChannelOverride ?? 10) == nil {
+                        self.fail(transportMessage: message)
+                        return
+                    }
+                    fellBack = true
+                    self.transport?.close()
+                    self.printLine(primaryWasRfcomm
+                        ? "rfcomm control unusable; retrying the same operation over BLE…"
+                        : "ble control unusable; retrying over the RFCOMM serial…")
+                    self.printLine(message)
+                    // restart the session cleanly over the other transport
+                    self.activeItem = nil; self.activePlan = nil
+                    self.cursor = 0
+                    self.lastRequestAt = nil; self.lastFrameAt = nil
+                    self.promptedConfirmation = false
+                    self.context.identity = nil
+                    self.context.wallpaperInventoryBody = nil
+                    self.context.common = nil
+                    self.context.more = nil
+                    if !activate(fallbackMode) { self.fail(transportMessage: message) }
+                    return
+                }
+                self.fail(transportMessage: message)
+            }
+            channel.start()
+            return true
+        }
+        guard activate(mode) else {
+            requestedClose = true
+            exitCallback?(2)
+            stopApplication()
+            return
+        }
+    }
+
+    /// Stops the accessory app loop while preserving our exit code
+    /// (terminate() would exit(0) and swallow it).
+    private func stopApplication() {
+        let application = NSApplication.shared
+        application.stop(nil)
+        let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [],
+                                       timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0)
+        if let event = event { application.postEvent(event, atStart: true) }
     }
 
     private func fail(transportMessage: String) {
@@ -369,6 +437,12 @@ final class Driver: NSObject {
     private func tick() {
         guard !requestedClose else { return }
         if Date().timeIntervalSince(startedAt) > hardDeadline { finish(exitCode: 1, message: "overall session timeout"); return }
+        // Nothing may hang silently waiting for a transport to open.
+        if let transport = transport, !transport.isOpen,
+           Date().timeIntervalSince(startedAt) > 90 {
+            finish(exitCode: 1, message: "transport \(transport.name) never opened within 90 s — see the hints printed above (link down? permission prompt pending? device asleep?)")
+            return
+        }
         if let plan = activePlan, plan.finished, let item = activeItem {
             if let failed = plan.failedText {
                 context.warnings.append("\(item.name): \(failed)")
@@ -392,7 +466,7 @@ final class Driver: NSObject {
             activeItem = item; activePlan = plan
             printDebug("starting step \(item.name)")
         }
-        guard let plan = activePlan, transport != nil, !plan.finished else { return }
+        guard let plan = activePlan, let transport = transport, transport.isOpen, !plan.finished else { return }
         if plan.awaitingConfirmation && !promptedConfirmation {
             promptedConfirmation = true
             printLine("AUTHORIZATION: single-press the power button on the Mic Pro now, then wait…")
@@ -410,7 +484,7 @@ final class Driver: NSObject {
         if lastRequestAt == nil {
             let outgoing = plan.outgoing(now: Date())
             if !outgoing.isEmpty {
-                for data in outgoing { transport?.write(data) }
+                for data in outgoing { transport.write(data) }
                 lastRequestAt = Date()
             }
         }
@@ -419,14 +493,12 @@ final class Driver: NSObject {
     private func finish(exitCode: Int, message: String?) {
         guard !requestedClose else { return }
         requestedClose = true
-        timer?.invalidate()
-        if let message = message, !jsonOutput {
-            FileHandle.standardError.write(Data(("error: " + message + "\n").utf8))
-        }
+        // Text-mode error printing belongs to the command's failure handler
+        // (sessionFailure) so the message is emitted exactly once.
         if let message = message, jsonOutput { jsonLines.append(message) }
         transport?.close()
         exitCallback?(exitCode)
-        CFRunLoopStop(CFRunLoopGetMain())
+        stopApplication()
     }
 
     func printLine(_ text: String) {

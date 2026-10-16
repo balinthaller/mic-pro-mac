@@ -170,6 +170,21 @@ read-only (values shown as raw hex, including the trailing protocol bytes).
 * First control session per power cycle requires a physical confirmation: the
   CLI prints "single-press the power button now" when the device asks for it.
 
+## Vendor behavior notes (observed on hardware, 2026-01 firmware)
+
+* **Gain mode couples to bit depth.** With 32-bit float **off**, the firmware
+  forces the "prevent audio clipping" safety limiter — there is no separate
+  persisted setting for it (verified by probe diff: toggling the app's gain
+  mode moves no settings byte). With 32-bit float **on**, manual gain applies.
+  From the CLI that is simply `set float32 on` + `set gain …`. The limiter may
+  still engage on its own even in float32 mode (app UI reflects this).
+* **One controller at a time.** The TX serves a single audio host, and the
+  vendor app wants the audio link as well — hand the mic over explicitly
+  (`disconnect-audio` / `connect-audio`) rather than expecting simultaneous
+  phone + Mac sessions.
+* **Power-button confirmation doubles as a noise toggle** on the TX; after an
+  authorization press, check `settings` and restore `noise` if it moved.
+
 ## Troubleshooting
 
 **"the Mic Pro is not connected over Bluetooth right now"** — macOS tears the

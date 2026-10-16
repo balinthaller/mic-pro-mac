@@ -59,10 +59,31 @@ micproctl disconnect-audio      # release it (e.g. to hand over to the phone app
 micproctl wallpaper backup      # verified backup of the e-ink image
 micproctl wallpaper upload img.png
 micproctl wallpaper restore --backup DIR
+
+micproctl preset                # apply your saved settings profile in ONE session
 ```
 
 Add `--json` anywhere for machine-readable output; `fields` lists every known
 setting; `probe read/diff` are read-only research commands (below).
+
+### Presets
+
+`micproctl preset [name]` applies a whole settings profile in a single
+session: one settings group write per touched group at most (fields that are
+already at target are skipped without writing), each write followed by the
+usual full read-back verification. `--list` shows all profiles.
+
+The built-in `default` profile is: stereo=on, float32=on, vibration=on,
+led=on, pattern=omni, lowcut=off, noise=off, gain=0. Fields it does not
+mention (e.g. `mute`, `childlock`) are left untouched. Define your own —
+or override `default` — in
+`~/Library/Application Support/MicProMac/presets.json`:
+
+```json
+{"default": {"stereo": "on", "float32": "on", "vibration": "on", "led": "on",
+             "pattern": "omni", "lowcut": "off", "noise": "off", "gain": "0"},
+ "podcast": {"pattern": "cardioid", "gain": "-3", "lowcut": "on"}}
+```
 
 ### Mapped settings
 

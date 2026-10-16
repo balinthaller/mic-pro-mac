@@ -87,6 +87,9 @@ func printHelp() {
       micproctl set vibration on|off
       micproctl set led on|off
       micproctl set <mapped-field> <value>   fields from protocol-map.json
+      micproctl preset [name] [--list]       apply a saved settings profile in one
+                                             session ("default" is built-in; add
+                                             yours in presets.json)
       micproctl fields                       list known fields and value domains
 
     E-ink screen (rfcomm transport; same verified-backup rules as upstream):
@@ -212,6 +215,124 @@ func printStatus(_ context: SessionContext, map: ProtocolMap, json: Bool) {
     if let inventory = context.wallpaperInventoryBody, inventory.count >= 50 {
         print("e-ink panel md5: " + Data(inventory[34..<50]).map { String(format: "%02x", $0) }.joined())
     }
+}
+
+// ---------- preset ----------
+
+final class PresetRunReport {
+    var changes: [PresetChange] = []
+    var groupStates: [UInt16: SettingsWriteOp.State] = [:]
+    var groupAcks: [UInt16: Bool] = [:]
+}
+
+func runPreset(options: CommonOptions, map: ProtocolMap, arguments: [String]) -> Never {
+    if arguments.contains("--list") {
+        let fileProfiles = loadPresetProfiles()
+        if options.json {
+            jsonPrint(["ok": true, "builtin": builtinPresets, "file": fileProfiles,
+                       "file_path": PresetsFile.url.path])
+            exit(0)
+        }
+        print("available presets:")
+        for (name, values) in builtinPresets.sorted(by: { $0.key < $1.key }) {
+            let body = values.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            print("  \(name) (built-in): \(body)")
+        }
+        for (name, values) in fileProfiles.sorted(by: { $0.key < $1.key }) {
+            let body = values.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            print("  \(name) (\(PresetsFile.url.path)): \(body)")
+        }
+        print("apply with: micproctl preset <name>   (no name = default)")
+        exit(0)
+    }
+    guard arguments.count <= 1 else { printErrorAndExit("usage: micproctl preset [name] [--list]") }
+    let profileName = arguments.first ?? "default"
+    let fileProfiles = loadPresetProfiles()
+    let values: [String: String]
+    if let fromFile = fileProfiles[profileName] {
+        values = fromFile
+    } else if let builtin = builtinPresets[profileName] {
+        values = builtin
+    } else {
+        let available = (Set(builtinPresets.keys).union(fileProfiles.keys)).sorted().joined(separator: ", ")
+        printErrorAndExit("unknown preset '\(profileName)'. Available: \(available). Define more in \(PresetsFile.url.path)")
+    }
+    guard !values.isEmpty else { printErrorAndExit("preset '\(profileName)' has no entries", 2) }
+
+    // Resolve and validate every entry BEFORE opening any connection.
+    var entries: [(field: FieldSpec, value: String)] = []
+    for (name, value) in values {
+        guard let field = field(named: name.lowercased(), map: map) else {
+            printErrorAndExit("preset '\(profileName)': unknown field '\(name)' (see `micproctl fields`)", 2)
+        }
+        guard field.group == 0x1000 || field.group == 0x1012 else {
+            printErrorAndExit("preset '\(profileName)': field '\(name)' is not writable", 2)
+        }
+        do { _ = try proposeChange(field, argument: value, current: Data(repeating: 0, count: field.group == 0x1000 ? 6 : 12)) }
+        catch CLIError.usage(let message) { printErrorAndExit("preset '\(profileName)': \(message)", 2) }
+        catch { printErrorAndExit("preset '\(profileName)': invalid value '\(value)' for '\(name)'", 2) }
+        entries.append((field, value))
+    }
+    entries.sort { $0.field.group == $1.field.group ? $0.field.index < $1.field.index : $0.field.group < $1.field.group }
+
+    // One session: identity read, then one group-merged write per touched
+    // group (each skipped entirely when every field is already at target).
+    let report = PresetRunReport()
+    let readBox = Box<AppControlReadPlan>()
+    var items = [readItemStep(includeBattery: false, into: readBox)]
+    for group in [UInt16(0x1000), UInt16(0x1012)] where entries.contains(where: { $0.field.group == group }) {
+        let box = Box<SettingsWriteOp>()
+        let groupEntries = entries.filter { $0.field.group == group }
+        items.append(Driver.Item(name: String(format: "preset-0x%04X", group), make: { driver in
+            guard let identity = driver.context.identity else {
+                driver.itemCreationError = "identity missing; read step failed"; return nil
+            }
+            do {
+                let op = try SettingsWriteOp(group: group, identity: identity) { current in
+                    let (merged, changes) = try applyPreset(entries: groupEntries, group: group, current: current)
+                    report.changes.append(contentsOf: changes)
+                    return merged
+                }
+                box.value = op
+                return op
+            } catch { driver.itemCreationError = "could not prepare the write plan"; return nil }
+        }, onDone: { driver in
+            guard let op = box.value else { return }
+            report.groupStates[group] = op.state
+            report.groupAcks[group] = op.acked
+            if let proposed = op.proposedValues { driver.context.replaceGroup(group, values: proposed) }
+        }))
+    }
+
+    let (driver, code) = runSession(options: options, items: items)
+    guard code == 0, !report.groupStates.isEmpty else { sessionFailure(driver, options, exitCode: code) }
+
+    if options.json {
+        let changes: [[String: Any]] = report.changes.map { ["field": $0.field, "value": $0.value, "changed": $0.changed] }
+        var groups: [String: Any] = [:]
+        for (group, state) in report.groupStates {
+            groups[String(format: "0x%04X", group)] = [
+                "written": state == .ready,
+                "acknowledged": report.groupAcks[group] ?? false,
+                "raw": driver.context.group(group).map { hexDump($0) } as Any,
+            ]
+        }
+        jsonPrint(["ok": true, "preset": profileName, "changes": changes, "groups": groups])
+        exit(0)
+    }
+    print("preset '\(profileName)':")
+    for change in report.changes {
+        print("  \(change.field.padding(toLength: 12, withPad: " ", startingAt: 0)) = \(change.value)\(change.changed ? "" : "   (already at target)")")
+    }
+    for (group, state) in report.groupStates.sorted(by: { $0.key < $1.key }) {
+        if state == .ready {
+            print(String(format: "group 0x%04X: written, verified by full-group read-back (device ack: %@)",
+                         group, (report.groupAcks[group] ?? false) ? "yes" : "no"))
+        } else {
+            print(String(format: "group 0x%04X: all fields already at target; nothing written", group))
+        }
+    }
+    exit(0)
 }
 
 // ---------- commands ----------
@@ -724,6 +845,7 @@ case "set":
     let value = rest.joined(separator: " ")
     runSet(options: options, map: map, fieldName: name.lowercased(), value: value)
 case "fields": runFields(map: map)
+case "preset": runPreset(options: options, map: map, arguments: rest)
 case "probe":
     guard !rest.isEmpty else { printErrorAndExit("usage: micproctl probe read|diff …") }
     let sub = rest.removeFirst()

@@ -147,3 +147,36 @@ mismatch.consume(frame: rawReply(mismatchQuery, identity: Data(repeating: 66, co
 assert(mismatch.errors[0x1011] != nil && mismatch.values.isEmpty)
 
 print("PASS: field semantics, runtime protocol map, guarded write ladder (ack, verify, external-change abort, no-op same-value, validation refusal, write timeout -> verify-only), raw group reads and envelope guards")
+
+// Preset fold: group-merged writes with per-field diff reporting
+do {
+    let stereo = knownFields.first { $0.name == "stereo" }!
+    let float = knownFields.first { $0.name == "float32" }!
+    let pattern = knownFields.first { $0.name == "pattern" }!
+    let gain = knownFields.first { $0.name == "gain" }!
+    let entrySpecs = [(stereo, "on"), (float, "on"), (pattern, "omni")]
+    let typed: [(field: FieldSpec, value: String)] = entrySpecs.map { ($0.0, $0.1) }
+    // group entries are folded over current bytes; pattern was cardioid(1), so all three move
+    let first = try applyPreset(entries: typed, group: 0x1012, current: Data([0x00, 0x00, 0x00, 0, 0, 0, 0x01, 0, 0, 0, 0, 0]))
+    assert(first.0 == Data([0x01, 0x01, 0x00, 0, 0, 0, 0x00, 0, 0, 0, 0, 0]))
+    assert(first.1.map { $0.changed } == [true, true, true])
+    assert(first.1.map { $0.field } == ["stereo", "float32", "pattern"])
+    // applying the same preset again is a no-op: nothing changed, nothing written
+    let second = try applyPreset(entries: typed, group: 0x1012, current: first.0)
+    assert(second.0 == first.0 && second.1.allSatisfy { !$0.changed })
+    // common group: gain 5 -> 0 is a real change; unrelated bytes survive the fold
+    let commonResult = try applyPreset(entries: [(gain, "0")], group: 0x1000, current: Data([1, 0, 5, 2, 0, 1]))
+    assert(commonResult.0 == Data([1, 0, 0, 2, 0, 1]) && commonResult.1[0].changed)
+    // invalid value is rejected, leaving the fold to fail before any write
+    do { _ = try applyPreset(entries: [(gain, "99")], group: 0x1000, current: Data(repeating: 0, count: 6)); assert(false) }
+    catch {}
+    // the built-in default profile resolves and validates against known fields
+    let profile = builtinPresets["default"]!
+    assert(profile.count == 8)
+    for (name, value) in profile {
+        guard let spec = knownFields.first(where: { $0.name == name }) else { assert(false); continue }
+        assert(spec.group == 0x1000 || spec.group == 0x1012)
+        _ = try proposeChange(spec, argument: value, current: Data(repeating: 0, count: spec.group == 0x1000 ? 6 : 12))
+    }
+}
+print("PASS: preset fold (group-merged bytes, per-field diff, idempotence, validation, built-in default resolves)")

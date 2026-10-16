@@ -117,6 +117,45 @@ func proposeChange(_ spec: FieldSpec, argument: String, current: Data) throws ->
     return result
 }
 
+// ---------- presets ----------
+
+struct PresetChange { let field: String; let value: String; let changed: Bool }
+
+/// Built-in profiles. "default" is the fork owner's preferred steady state;
+/// users can add their own (and override "default") in presets.json.
+let builtinPresets: [String: [String: String]] = [
+    "default": ["stereo": "on", "float32": "on", "vibration": "on", "led": "on",
+                "pattern": "omni", "lowcut": "off", "noise": "off", "gain": "0"],
+]
+
+enum PresetsFile {
+    static let url = DeviceConfig.dataDirectory.appendingPathComponent("presets.json")
+}
+
+func loadPresetProfiles() -> [String: [String: String]] {
+    guard let data = try? Data(contentsOf: PresetsFile.url),
+          let object = try? JSONSerialization.jsonObject(with: data),
+          let profiles = object as? [String: [String: String]] else { return [:] }
+    return profiles
+}
+
+/// Folds every preset entry that targets `group` into the group's current
+/// bytes. Pure: no I/O and no device, so offline tests cover the merge and
+/// per-field diff logic. Fields outside `group` are ignored.
+func applyPreset(entries: [(field: FieldSpec, value: String)], group: UInt16,
+                 current: Data) throws -> (Data, [PresetChange]) {
+    var merged = current
+    var changes: [PresetChange] = []
+    for entry in entries where entry.field.group == group {
+        let index = merged.startIndex + Int(entry.field.index)
+        let before = index < merged.endIndex ? merged[index] : nil
+        merged = try proposeChange(entry.field, argument: entry.value, current: merged)
+        let after = index < merged.endIndex ? merged[index] : nil
+        changes.append(PresetChange(field: entry.field.name, value: entry.value, changed: before != after))
+    }
+    return (merged, changes)
+}
+
 func hexDump(_ data: Data) -> String { data.map { String(format: "%02X", $0) }.joined(separator: " ") }
 
 func decodeGroup(_ group: UInt16, _ values: Data, map: ProtocolMap) -> [(position: Int, label: String, value: String)] {

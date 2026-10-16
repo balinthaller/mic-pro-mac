@@ -128,11 +128,10 @@ Tips for the cataloguing session:
   "sane" mapping looks like before discovering the unmapped bytes.
 * The vendor "bit depth" choice is very likely the known 32-bit-float byte
   (`set float32`) — test it with a diff before hunting for a new byte.
-* If the app refuses to change something while the TX streams to the Mac
-  (some settings are disabled while live), disconnect the audio link
-  (`micproctl disconnect-audio`), make the change in the app, reconnect
-  (`micproctl connect-audio`), then press ENTER — the two snapshots run in
-  independent sessions, so this is safe.
+* If the mic will not come back to the Mac while the app is open, fully
+  close the app (or toggle the phone's Bluetooth off) and run
+  `micproctl connect-audio` — the TX accepts a new host page and drops the
+  phone link.
 
 When you know the byte and its values, add it to
 `~/Library/Application Support/MicProMac/protocol-map.json`:

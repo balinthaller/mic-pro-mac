@@ -418,8 +418,11 @@ func runProbeDiff(options: CommonOptions, map: ProtocolMap, groupArguments: [Str
     print("== probe diff: snapshot 1 ==")
     guard let before = probeSnapshot(options: options, groups: extraGroups) else { exit(1) }
     print("snapshot 1 captured (\(Date().formatted()))")
-    print("Now change exactly ONE setting — official mobile app or device buttons both work;")
-    print("wait for the app / e-ink to confirm the change took, then press ENTER here…")
+    print("Now change exactly ONE setting. The mic serves one controller at a time, so:")
+    print("  1. hand it to the phone app (the Mac link drops, or run disconnect-audio first),")
+    print("  2. change the setting there; confirm on the e-ink screen,")
+    print("  3. close the app and run `micproctl connect-audio` to bring it back,")
+    print("then press ENTER here…")
     _ = readLine()
     print("== probe diff: snapshot 2 ==")
     guard let after = probeSnapshot(options: options, groups: extraGroups) else { exit(1) }

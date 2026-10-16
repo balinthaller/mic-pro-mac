@@ -14,6 +14,9 @@ struct FieldSpec {
     let index: Int
     let kind: FieldKind
     let values: [String: UInt8]
+    /// Alternate spellings accepted at parse time. Never used for decode,
+    /// which needs exactly one name per value to stay deterministic.
+    var aliases: [String: UInt8] = [:]
     let summary: String
     var valueText: String {
         switch kind {
@@ -27,7 +30,9 @@ struct FieldSpec {
 let knownFields: [FieldSpec] = [
     FieldSpec(name: "mute", group: 0x1000, index: 1, kind: .boolean, values: [:], summary: "mute the transmitter"),
     FieldSpec(name: "gain", group: 0x1000, index: 2, kind: .gainDB, values: [:], summary: "input gain, -12...12 dB"),
-    FieldSpec(name: "noise", group: 0x1000, index: 3, kind: .enumValues, values: ["off": 0, "on": 1, "high": 2], summary: "noise reduction level (semantics of 1/2 verified on device only)"),
+    FieldSpec(name: "noise", group: 0x1000, index: 3, kind: .enumValues,
+              values: ["off": 0, "low": 1, "high": 2], aliases: ["on": 1],
+              summary: "noise reduction level (app labels: off/low/high)"),
     FieldSpec(name: "pattern", group: 0x1012, index: 6, kind: .enumValues,
               values: ["omni": 0, "cardioid": 1, "figure8": 2, "voicefocus": 3],
               summary: "sound direction / polar pattern (mapped by probe diff on firmware of 2026-01)"),
@@ -109,10 +114,13 @@ func proposeChange(_ spec: FieldSpec, argument: String, current: Data) throws ->
         guard let value = Int(argument), (-12...12).contains(value) else { throw CLIError.usage("gain expects an integer -12...12") }
         result[base] = UInt8(bitPattern: Int8(value))
     case .enumValues:
-        guard let value = spec.values[argument] else {
+        if let value = spec.values[argument] {
+            result[base] = value
+        } else if let value = spec.aliases[argument] {
+            result[base] = value
+        } else {
             throw CLIError.usage("\(spec.name) expects one of: \(spec.values.keys.sorted().joined(separator: "|"))")
         }
-        result[base] = value
     }
     return result
 }
@@ -126,6 +134,10 @@ struct PresetChange { let field: String; let value: String; let changed: Bool }
 let builtinPresets: [String: [String: String]] = [
     "default": ["stereo": "on", "float32": "on", "vibration": "on", "led": "on",
                 "pattern": "omni", "lowcut": "off", "noise": "off", "gain": "0"],
+    // Same base state as "default" with spoken-word overrides; the merged
+    // writer means switching default<->voice only rewrites differing bytes.
+    "voice": ["stereo": "on", "float32": "on", "vibration": "on", "led": "on",
+              "pattern": "voicefocus", "lowcut": "on", "noise": "low", "gain": "0"],
 ]
 
 enum PresetsFile {

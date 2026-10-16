@@ -79,7 +79,7 @@ func printHelp() {
       micproctl battery --classic            quick read via the macOS BT cache
       micproctl settings [--raw]             decoded settings groups
       micproctl set gain -6                  -12...12 dB
-      micproctl set noise off|on|high
+      micproctl set noise off|low|high      (legacy "on" = low)
       micproctl set mute on|off
       micproctl set float32 on|off           32-bit float recording
       micproctl set lowcut on|off

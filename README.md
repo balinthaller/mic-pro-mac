@@ -73,9 +73,11 @@ session: one settings group write per touched group at most (fields that are
 already at target are skipped without writing), each write followed by the
 usual full read-back verification. `--list` shows all profiles.
 
-The built-in `default` profile is: stereo=on, float32=on, vibration=on,
-led=on, pattern=omni, lowcut=off, noise=off, gain=0. Fields it does not
-mention (e.g. `mute`, `childlock`) are left untouched. Define your own —
+Two built-in profiles: `default` (stereo=on, float32=on, vibration=on,
+led=on, pattern=omni, lowcut=off, noise=off, gain=0) and `voice` (the same
+base state with pattern=voicefocus, noise=low, lowcut=on — switching between
+the two only rewrites the differing bytes). Fields a profile does not mention
+(e.g. `mute`, `childlock`) are left untouched. Define your own —
 or override `default` — in
 `~/Library/Application Support/MicProMac/presets.json`:
 
@@ -92,7 +94,7 @@ or override `default` — in
 | Recording state (read-only) | `status` | `0x1000[0]` | active/inactive |
 | Mute | `set mute` | `0x1000[1]` | on/off |
 | Input gain | `set gain` | `0x1000[2]` | −12…12 dB (Int8) |
-| Noise reduction | `set noise` | `0x1000[3]` | off/on/high |
+| Noise reduction | `set noise` | `0x1000[3]` | off/low/high (`on` accepted as an alias for low) |
 | 32-bit float (bit depth) | `set float32` | `0x1012[0]` | on/off |
 | Stereo / mono | `set stereo` | `0x1012[1]` | on/off |
 | Low-cut filter | `set lowcut` | `0x1012[4]` | on/off |

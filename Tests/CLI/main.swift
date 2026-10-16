@@ -180,3 +180,27 @@ do {
     }
 }
 print("PASS: preset fold (group-merged bytes, per-field diff, idempotence, validation, built-in default resolves)")
+
+// Noise domain: app labels off/low/high with legacy "on" alias; decode deterministic
+do {
+    let noise = knownFields.first { $0.name == "noise" }!
+    assert(try! proposeChange(noise, argument: "low", current: common)[3] == 1)
+    assert(try! proposeChange(noise, argument: "on", current: common)[3] == 1)
+    assert(try! proposeChange(noise, argument: "high", current: common)[3] == 2)
+    assert((try? proposeChange(noise, argument: "medium", current: common)) == nil)
+    var lowCommon = common; lowCommon[lowCommon.startIndex + 3] = 1
+    assert(decodeField(noise, from: lowCommon) == "low")
+    // both built-in profiles resolve and validate against known fields
+    for profileName in ["default", "voice"] {
+        guard let profile = builtinPresets[profileName] else { assert(false); continue }
+        assert(profile.count == 8)
+        for (name, value) in profile {
+            guard let spec = knownFields.first(where: { $0.name == name }) else { assert(false); continue }
+            _ = try proposeChange(spec, argument: value, current: Data(repeating: 0, count: spec.group == 0x1000 ? 6 : 12))
+        }
+    }
+    assert(builtinPresets["voice"]?["pattern"] == "voicefocus")
+    assert(builtinPresets["voice"]?["noise"] == "low")
+    assert(builtinPresets["voice"]?["lowcut"] == "on")
+}
+print("PASS: noise off/low/high with on-alias; voice + default built-in profiles resolve")
